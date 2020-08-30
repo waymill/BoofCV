@@ -19,27 +19,21 @@
 package boofcv.alg.sfm.structure2;
 
 import boofcv.abst.geo.TriangulateNViewsMetric;
-import boofcv.abst.geo.bundle.BundleAdjustment;
 import boofcv.abst.geo.bundle.SceneObservations;
 import boofcv.abst.geo.bundle.SceneStructureMetric;
-import boofcv.alg.distort.pinhole.PinholePtoN_F64;
+import boofcv.alg.distort.brown.RemoveBrownPtoN_F64;
 import boofcv.alg.geo.MultiViewOps;
 import boofcv.alg.geo.bundle.cameras.BundlePinholeSimplified;
 import boofcv.alg.geo.selfcalib.TwoViewToCalibratingHomography;
 import boofcv.alg.sfm.structure2.PairwiseImageGraph2.Motion;
 import boofcv.alg.sfm.structure2.PairwiseImageGraph2.View;
-import boofcv.factory.geo.ConfigTriangulation;
-import boofcv.factory.geo.FactoryMultiView;
 import boofcv.misc.BoofMiscOps;
-import boofcv.misc.ConfigConverge;
 import boofcv.struct.geo.AssociatedPair;
 import boofcv.struct.geo.AssociatedTriple;
 import georegression.geometry.UtilPoint3D_F64;
 import georegression.struct.point.Point2D_F64;
 import georegression.struct.point.Point3D_F64;
 import georegression.struct.se.Se3_F64;
-import lombok.Getter;
-import lombok.Setter;
 import org.ddogleg.struct.FastQueue;
 import org.ejml.UtilEjml;
 import org.ejml.data.DMatrixRMaj;
@@ -77,17 +71,15 @@ public class MetricExpandByOneView extends ExpandByOneView {
 	// Finds the calibrating homography when metric parameters are known for two views
 	protected TwoViewToCalibratingHomography projectiveHomography = new TwoViewToCalibratingHomography();
 
-	/** The estimated scene structure. This the final estimated scene state */
-	protected final @Getter SceneStructureMetric structure = new SceneStructureMetric(true);
-	protected final @Getter SceneObservations observations = new SceneObservations();
-	protected @Getter @Setter BundleAdjustment<SceneStructureMetric> sba = FactoryMultiView.bundleSparseMetric(null);
-	protected @Getter @Setter TriangulateNViewsMetric triangulator = FactoryMultiView.triangulateNViewCalibrated((ConfigTriangulation)null);
+	/** Bundle Adjustment functions and configurations */
+	public final MetricBundleAdjustmentUtils bundleAdjustment = new MetricBundleAdjustmentUtils();
 
+	// Used for triangulation
 	protected final List<Point2D_F64> pixelNorms = BoofMiscOps.createListFilled(3,Point2D_F64::new);
 	protected final List<Se3_F64> listMotion = new ArrayList<>();
-	protected final PinholePtoN_F64 normalize1 = new PinholePtoN_F64();
-	protected final PinholePtoN_F64 normalize2 = new PinholePtoN_F64();
-	protected final PinholePtoN_F64 normalize3 = new PinholePtoN_F64();
+	protected final RemoveBrownPtoN_F64 normalize1 = new RemoveBrownPtoN_F64();
+	protected final RemoveBrownPtoN_F64 normalize2 = new RemoveBrownPtoN_F64();
+	protected final RemoveBrownPtoN_F64 normalize3 = new RemoveBrownPtoN_F64();
 
 	//------------------------- Local work space
 
@@ -113,6 +105,7 @@ public class MetricExpandByOneView extends ExpandByOneView {
 		listMotion.add(view1_to_view1);
 		listMotion.add(view1_to_view2);
 		listMotion.add(view1_to_target);
+//		bundleAdjustment.keepFraction = 0.95; <-- this made it worse by a lot?!
 	}
 
 	/**
@@ -246,6 +239,9 @@ public class MetricExpandByOneView extends ExpandByOneView {
 	 * Optimize the three view metric local scene using SBA
 	 */
 	private void refineWithBundleAdjustment(SceneWorkingGraph workGraph) {
+		final SceneStructureMetric structure = bundleAdjustment.structure;
+		final SceneObservations observations = bundleAdjustment.observations;
+
 		// Look up known information
 		SceneWorkingGraph.View wview1 = workGraph.lookupView(utils.seed.id);
 		SceneWorkingGraph.View wview2 = workGraph.lookupView(utils.viewB.id);
@@ -261,10 +257,10 @@ public class MetricExpandByOneView extends ExpandByOneView {
 		observations.getView(1).resize(numFeatures);
 		observations.getView(2).resize(numFeatures);
 
-		// TODO change to pinhole simplified? (0,0) is assumed at this point
-		// Camera parameters and Se3 for all views can change to mitigate past mistakes
-		// if there was a past mistake the idea is that it can be recovered from here, however if a mistake is
-		// made here it will be compensated for by being ignored in future calls.
+		// Camera parameters for previous views are fixed. If not a copy should be passed in since it will be modified
+		// Argument for fixing: Reduce drift and past information can make up for sparse or poor observations in
+		// the current triplet
+		// Argument against: Past mistakes are propagated and go from bad to total failure
 		structure.setCamera(0,true, wview1.intrinsic);
 		structure.setCamera(1,true, wview2.intrinsic);
 		structure.setCamera(2,false,wview3.intrinsic);
@@ -276,14 +272,15 @@ public class MetricExpandByOneView extends ExpandByOneView {
 		structure.connectViewToCamera(2,2);
 
 		// Add observations and 3D feature locations
-		normalize1.set(wview1.intrinsic.f,wview1.intrinsic.f,0,0,0);
-		normalize2.set(wview2.intrinsic.f,wview2.intrinsic.f,0,0,0);
-		normalize3.set(wview3.intrinsic.f,wview3.intrinsic.f,0,0,0);
+		normalize1.setK(wview1.intrinsic.f,wview1.intrinsic.f,0,0,0).setDistortion(wview1.intrinsic.k1,wview1.intrinsic.k2);
+		normalize2.setK(wview2.intrinsic.f,wview2.intrinsic.f,0,0,0).setDistortion(wview2.intrinsic.k1,wview2.intrinsic.k2);
+		normalize3.setK(wview3.intrinsic.f,wview3.intrinsic.f,0,0,0).setDistortion(wview3.intrinsic.k1,wview3.intrinsic.k2);
 
 		SceneObservations.View viewObs1 = observations.getView(0);
 		SceneObservations.View viewObs2 = observations.getView(1);
 		SceneObservations.View viewObs3 = observations.getView(2);
 
+		final TriangulateNViewsMetric triangulator = bundleAdjustment.triangulator;
 		Point3D_F64 foundX = new Point3D_F64();
 		for (int featIdx = 0; featIdx < numFeatures; featIdx++) {
 			AssociatedTriple a = triples.get(featIdx);
@@ -306,10 +303,7 @@ public class MetricExpandByOneView extends ExpandByOneView {
 		}
 
 		// Refine using bundle adjustment
-		ConfigConverge converge = utils.configConvergeSBA;
-		sba.configure(converge.ftol,converge.gtol,converge.maxIterations);
-		sba.setParameters(structure,observations);
-		if( !sba.optimize(structure) )
+		if( !bundleAdjustment.process(null) )
 			throw new RuntimeException("Handle this");
 
 		// copy results for output
