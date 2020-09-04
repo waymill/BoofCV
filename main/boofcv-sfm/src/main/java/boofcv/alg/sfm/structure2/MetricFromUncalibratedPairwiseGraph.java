@@ -94,7 +94,7 @@ public class MetricFromUncalibratedPairwiseGraph extends ReconstructionFromPairw
 	}
 
 	{
-		// prune worse case observations
+		// prune outlier observations and run SBA a second time
 		refineWorking.bundleAdjustment.keepFraction = 0.95;
 	}
 
@@ -141,7 +141,7 @@ public class MetricFromUncalibratedPairwiseGraph extends ReconstructionFromPairw
 		if (!projectiveSeedToMetric(graph))
 			return false;
 
-		// TODO enable when more confident that it's not messing something up
+		// Refine initial estimate
 		refineWorking.process(db,workGraph);
 
 		// Expand to the remaining views one at a time
