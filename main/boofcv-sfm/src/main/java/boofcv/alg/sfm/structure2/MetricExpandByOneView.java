@@ -35,7 +35,6 @@ import georegression.struct.point.Point2D_F64;
 import georegression.struct.point.Point3D_F64;
 import georegression.struct.se.Se3_F64;
 import org.ddogleg.struct.FastQueue;
-import org.ejml.UtilEjml;
 import org.ejml.data.DMatrixRMaj;
 
 import java.util.ArrayList;
@@ -209,13 +208,6 @@ public class MetricExpandByOneView extends ExpandByOneView {
 		SceneWorkingGraph.View wview2 = workGraph.lookupView(utils.viewB.id);
 		wview1.world_to_view.invert(null).concat(wview2.world_to_view,view1_to_view2);
 
-		// use the largest axis (which should not be equal to 0.0) to determine the scale + sign
-		int which = UtilPoint3D_F64.axisLargestAbs(view1_to_view2.T);
-		double scale = view1_to_view2H.T.getIdx(which)/view1_to_view2.T.getIdx(which);
-		if(UtilEjml.isUncountable(scale)) {
-			scale = 0.0; // if pathological fail gracefully
-		}
-
 		if( verbose != null ) {
 			// print the found view 1 to view 2 using local information only
 			verbose.printf("L View 1 to 2     T={%.1f %.1f %.1f)\n",
@@ -223,6 +215,7 @@ public class MetricExpandByOneView extends ExpandByOneView {
 		}
 
 		// Now set the global view-1 to view-2 at the local scale
+		double scale = MultiViewOps.findScale(view1_to_view2.T,view1_to_view2H.T);
 		view1_to_view2H.set(view1_to_view2);
 		view1_to_view2H.T.scale(scale);
 
@@ -295,7 +288,7 @@ public class MetricExpandByOneView extends ExpandByOneView {
 			if( !triangulator.triangulate(pixelNorms,listMotion,foundX) ) {
 				throw new RuntimeException("This should be handled");
 			}
-			// TODO also check to see if it appears behind the camera
+
 			structure.setPoint(featIdx,foundX.x,foundX.y,foundX.z,1.0);
 			structure.connectPointToView(featIdx,0);
 			structure.connectPointToView(featIdx,1);
