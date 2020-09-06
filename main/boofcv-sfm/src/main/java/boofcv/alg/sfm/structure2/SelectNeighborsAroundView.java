@@ -25,10 +25,7 @@ import org.ddogleg.sorting.QuickSort_F64;
 import org.ddogleg.struct.FastQueue;
 import org.ddogleg.struct.GrowQueue_F64;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import static boofcv.misc.BoofMiscOps.assertBoof;
 
@@ -90,6 +87,8 @@ public class SelectNeighborsAroundView {
 	Map<String,View> lookup = new HashMap<>();
 	// List of all edges with scores
 	FastQueue<EdgeScore> edges = new FastQueue<>(EdgeScore::new);
+	// indicates if a view has been included in an inlier set
+	Set<String> hasFeatures = new HashSet<>();
 
 	// storage for the score of connected edges
 	GrowQueue_F64 connScores = new GrowQueue_F64();
@@ -113,14 +112,48 @@ public class SelectNeighborsAroundView {
 		pruneViews(target);
 
 		// Create the local working graph that can be optimized
-		candidates.add(target); // now add the target view to make it easier to see if a view is in the graph
-		localWorking.addView(target.pview);
+		hasFeatures.clear();
+		// add target to make it easier to see if it's in the sub-graph or not
+		lookup.put(target.pview.id,target);
+		addViewToLocal(target);
 		for (int i = 0; i < candidates.size(); i++) {
-			localWorking.addView(candidates.get(i).pview);
-			// TODO If it contains inlier info add that but prune info on views not in this graph
+			addViewToLocal(candidates.get(i));
+		}
+		// For views with no features look at its neighbors to see if it's an inlier then add those
+		for (int i = 0; i < candidates.size(); i++) {
+			View v = candidates.get(i);
+			if( hasFeatures.contains(v.pview.id))
+				continue;
 		}
 		// TODO look for nodes that were not included in any inlier list and create a new one based on their
 		// neighbors that might not be candidates
+	}
+
+	void addViewToLocal(View target) {
+		View localView = localWorking.addView(target.pview);
+
+		if( target.inliers.isEmpty() )
+			return;
+
+		// copy geometric information over
+		localView.intrinsic.set(target.intrinsic);
+		localView.projective.set(target.projective);
+		localView.world_to_view.set(target.world_to_view);
+		localView.imageDimension.setTo(target.imageDimension);
+
+		// Copy over inliers that are in the sub graph
+		for (int i = 0; i < target.inliers.views.size; i++) {
+			PairwiseImageGraph2.View pview = target.inliers.views.get(i);
+			// see if it's in the sub graph
+			if( !lookup.containsKey(pview.id) )
+				continue;
+			// mark this as having features assigned to it
+			hasFeatures.add(pview.id);
+
+			// Add the inliers to the local view
+			localView.inliers.views.add(pview);
+			localView.inliers.observations.grow().setTo(target.inliers.observations.get(i));
+		}
 	}
 
 	/**
