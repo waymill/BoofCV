@@ -159,6 +159,10 @@ public class PairwiseImageGraph2 {
 			dst = null;
 		}
 
+		public boolean isConnected( View v ) {
+			return v == src || v == dst;
+		}
+
 		/** Given one of the view this motion connects return the other */
 		public View other( View src ) {
 			if( src == this.src) {
